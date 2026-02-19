@@ -55,11 +55,17 @@ bot.onText(/\/start/, (msg) => {
     msg.chat.id,
 `🤖 Bot activo
 
-Comandos:
-• /addconfig → agregar sites + proxies
-• /multichk → ejecutar
+Comandos disponibles:
+• /addsites → agregar sites (texto)
+• /addproxies → agregar proxies (texto)
+• /addconfig → agregar sites + proxies juntos
+• /status → ver estado
+• /multichk → ejecutar checks
 • /stop → detener
-• /status → ver estado`
+
+También puedes subir archivos .txt con caption:
+• sites
+• proxies`
   );
 });
 
@@ -74,28 +80,86 @@ bot.onText(/\/status/, (msg) => {
   );
 });
 
-/* ================== ADD CONFIG ================== */
-bot.onText(/\/addconfig([\s\S]*)/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const input = match[1];
-
-  if (!input || !input.includes('[SITES]') || !input.includes('[PROXIES]')) {
+/* ================== ADD SITES ================== */
+bot.onText(/\/addsites([\s\S]*)/, (msg, match) => {
+  const input = match[1].trim();
+  if (!input) {
     return bot.sendMessage(
-      chatId,
+      msg.chat.id,
 `❌ Formato incorrecto
 
 Ejemplo:
-\`\`\`
+/addsites
+https://site1.com
+https://site2.com`
+    );
+  }
+
+  const lines = input.split('\n').map(x => x.trim()).filter(Boolean);
+  let added = 0;
+
+  for (const site of lines) {
+    if (!data.sites.includes(site)) {
+      data.sites.push(site);
+      added++;
+    }
+  }
+
+  saveData();
+  bot.sendMessage(
+    msg.chat.id,
+`🌐 Sites añadidos: ${added}
+Total: ${data.sites.length}`
+  );
+});
+
+/* ================== ADD PROXIES ================== */
+bot.onText(/\/addproxies([\s\S]*)/, (msg, match) => {
+  const input = match[1].trim();
+  if (!input) {
+    return bot.sendMessage(
+      msg.chat.id,
+`❌ Formato incorrecto
+
+Ejemplo:
+/addproxies
+ip:port:user:pass`
+    );
+  }
+
+  const lines = input.split('\n').map(x => x.trim()).filter(Boolean);
+  let added = 0;
+
+  for (const proxy of lines) {
+    if (!data.proxies.includes(proxy)) {
+      data.proxies.push(proxy);
+      added++;
+    }
+  }
+
+  saveData();
+  bot.sendMessage(
+    msg.chat.id,
+`🧰 Proxies añadidos: ${added}
+Total: ${data.proxies.length}`
+  );
+});
+
+/* ================== ADD CONFIG ================== */
+bot.onText(/\/addconfig([\s\S]*)/, (msg, match) => {
+  const input = match[1];
+  if (!input || !input.includes('[SITES]') || !input.includes('[PROXIES]')) {
+    return bot.sendMessage(
+      msg.chat.id,
+`❌ Formato incorrecto
+
+Ejemplo:
 /addconfig
 [SITES]
 https://site1.com
-https://site2.com
 
 [PROXIES]
-ip:port:user:pass
-ip:port:user:pass
-\`\`\``,
-      { parse_mode: 'Markdown' }
+ip:port:user:pass`
     );
   }
 
@@ -123,39 +187,68 @@ ip:port:user:pass
   }
 
   saveData();
-
   bot.sendMessage(
-    chatId,
+    msg.chat.id,
 `✅ Configuración guardada
 
 🌐 Sites añadidos: ${addedSites}
-🧰 Proxies añadidos: ${addedProxies}
-
-Totales:
-🌐 ${data.sites.length}
-🧰 ${data.proxies.length}`
+🧰 Proxies añadidos: ${addedProxies}`
   );
 });
 
-/* ================== DELETE ================== */
-bot.onText(/\/delsites (.+)/, (msg, match) => {
-  const arg = match[1].trim();
-  if (arg === 'all') {
-    const c = data.sites.length;
-    data.sites = [];
-    saveData();
-    return bot.sendMessage(msg.chat.id, `🌐 Sites eliminados: ${c}`);
-  }
-});
+/* ================== IMPORT TXT (SITES / PROXIES) ================== */
+bot.on('document', async (msg) => {
+  const chatId = msg.chat.id;
+  const caption = (msg.caption || '').toLowerCase();
 
-bot.onText(/\/delproxies (.+)/, (msg, match) => {
-  const arg = match[1].trim();
-  if (arg === 'all') {
-    const c = data.proxies.length;
-    data.proxies = [];
-    saveData();
-    return bot.sendMessage(msg.chat.id, `🧰 Proxies eliminados: ${c}`);
+  if (!['sites', 'proxies'].includes(caption)) {
+    return bot.sendMessage(
+      chatId,
+      '❌ Adjunta el archivo con la palabra: sites o proxies'
+    );
   }
+
+  const fileId = msg.document.file_id;
+  const filePath = await bot.downloadFile(fileId, './');
+
+  const lines = fs
+    .readFileSync(filePath, 'utf8')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
+
+  let added = 0;
+
+  if (caption === 'sites') {
+    for (const site of lines) {
+      if (!data.sites.includes(site)) {
+        data.sites.push(site);
+        added++;
+      }
+    }
+  }
+
+  if (caption === 'proxies') {
+    for (const proxy of lines) {
+      if (!data.proxies.includes(proxy)) {
+        data.proxies.push(proxy);
+        added++;
+      }
+    }
+  }
+
+  saveData();
+  fs.unlinkSync(filePath);
+
+  bot.sendMessage(
+    chatId,
+`✅ Archivo procesado
+
+📂 Tipo: ${caption}
+➕ Añadidos: ${added}
+🌐 Sites: ${data.sites.length}
+🧰 Proxies: ${data.proxies.length}`
+  );
 });
 
 /* ================== MULTI-CHK ================== */

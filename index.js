@@ -13,13 +13,12 @@ if (!BOT_TOKEN) {
 }
 
 /* =====================================================
-   🔥 RESET AUTOMÁTICO TELEGRAM (ANTI 409 CONFLICT)
-   Esto limpia sesiones viejas de polling al arrancar
+   🔥 RESET TELEGRAM (CORRECTO, NO ROBA POLLING)
    ===================================================== */
 (async () => {
   try {
-    const resetBot = new TelegramBot(BOT_TOKEN);
-    await resetBot.deleteWebhook({ drop_pending_updates: true });
+    const tmpBot = new TelegramBot(BOT_TOKEN, { polling: false });
+    await tmpBot.deleteWebhook({ drop_pending_updates: true });
     console.log('✅ Telegram polling reset OK');
   } catch (e) {
     console.error('⚠️ Error reseteando Telegram:', e.message);
@@ -27,7 +26,7 @@ if (!BOT_TOKEN) {
 })();
 
 /* =====================================================
-   BOT PRINCIPAL
+   BOT PRINCIPAL (ÚNICA INSTANCIA)
    ===================================================== */
 const bot = new TelegramBot(BOT_TOKEN, {
   polling: {
@@ -62,12 +61,13 @@ function isOwner(id) {
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-`🤖 Bot activo (versión nueva)
+`🤖 *Bot activo*
 
-Sites: ${data.sites.length}
-Proxies: ${data.proxies.length}
+🌐 Sites: ${data.sites.length}
+🧰 Proxies: ${data.proxies.length}
 
-Comandos:
+*Comandos*
+
 • /addsites
 • /listsites
 • /delsite <n>
@@ -79,7 +79,8 @@ Comandos:
 • /clearproxies
 
 • /chk <datos>
-• /stop`
+• /stop`,
+    { parse_mode: 'Markdown' }
   );
 });
 
@@ -104,7 +105,7 @@ bot.onText(/\/listsites/, (msg) => {
     return bot.sendMessage(msg.chat.id, '❌ No hay sites guardados');
   }
   const list = data.sites.map((s, i) => `${i + 1}. ${s}`).join('\n');
-  bot.sendMessage(msg.chat.id, `🌐 Sites:\n\n${list}`);
+  bot.sendMessage(msg.chat.id, `🌐 *Sites*\n\n${list}`, { parse_mode: 'Markdown' });
 });
 
 bot.onText(/\/delsite (\d+)/, (msg, match) => {
@@ -145,7 +146,7 @@ bot.onText(/\/listproxies/, (msg) => {
     return bot.sendMessage(msg.chat.id, '❌ No hay proxies guardados');
   }
   const list = data.proxies.map((p, i) => `${i + 1}. ${p}`).join('\n');
-  bot.sendMessage(msg.chat.id, `🧰 Proxies:\n\n${list}`);
+  bot.sendMessage(msg.chat.id, `🧰 *Proxies*\n\n${list}`, { parse_mode: 'Markdown' });
 });
 
 bot.onText(/\/delproxy (\d+)/, (msg, match) => {

